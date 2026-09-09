@@ -147,3 +147,24 @@ def update_ticket_status(ticket_id: int, ticket_update: TicketStatusUpdate):
 
 
 
+
+
+@app.delete("/tickets/{ticket_id}")
+def delete_ticket(ticket_id: int):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("DELETE FROM tickets WHERE id = %s RETURNING id;", (ticket_id,))
+    deleted_ticket = cursor.fetchone()
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    if deleted_ticket is None:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+
+    return {
+        "message": "Ticket deleted successfully",
+        "ticket_id": deleted_ticket[0]
+    }
