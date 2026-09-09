@@ -31,7 +31,7 @@ def home():
     return {"message": "AI IT Operations Platform is running"}
 
 
-@app.post("/tickets")
+@app.post("/tickets", status_code=201)
 def create_ticket(ticket: Ticket):
     conn = get_connection()
 
