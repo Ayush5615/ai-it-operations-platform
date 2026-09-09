@@ -13,8 +13,7 @@ app = FastAPI()
 class Ticket(BaseModel):
     title: str
     description: str
-    priority: str
-
+    priority: Literal["low", "medium", "high"]
 
 def get_connection():
     return psycopg.connect(
@@ -132,7 +131,7 @@ def update_ticket_status(ticket_id: int, ticket_update: TicketStatusUpdate):
     conn.close()
 
     if updated_ticket is None:
-        return {"message": "Ticket not found"}
+        raise HTTPException(status_code=404, detail="Ticket not found")
 
     return {
         "message": "Ticket status updated successfully",
