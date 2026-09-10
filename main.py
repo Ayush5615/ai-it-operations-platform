@@ -1,61 +1,146 @@
-from fastapi import FastAPI, HTTPException, Depends
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from pydantic import BaseModel
-import psycopg
-from dotenv import load_dotenv
 import os
+import re
+from pathlib import Path
+from datetime import datetime, timezone, timedelta
 from typing import Literal
-from datetime import datetime, timedelta, timezone
 
 import jwt
+import requests
+import psycopg
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from pydantic import BaseModel
 from pwdlib import PasswordHash
 
 
-# --------------------------------------------------
-# Environment Configuration
-# --------------------------------------------------
+# ==================================================
+# ENVIRONMENT CONFIGURATION
+# ==================================================
 
-load_dotenv()
+BASE_DIR = Path(__file__).resolve().parent.parent
+ENV_PATH = BASE_DIR / ".env"
+
+load_dotenv(ENV_PATH)
+
+DB_HOST = os.getenv("DB_HOST")
+DB_PORT = os.getenv("DB_PORT")
+DB_NAME = os.getenv("DB_NAME")
+DB_USER = os.getenv("DB_USER")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
 
 SECRET_KEY = os.getenv("SECRET_KEY")
 
-if not SECRET_KEY:
-    raise RuntimeError("SECRET_KEY is not configured in .env")
+
+# ==================================================
+# OLLAMA CONFIGURATION
+# ==================================================
+
+OLLAMA_URL = "http://localhost:11434/api/generate"
+OLLAMA_MODEL = "llama3.2:3b"
 
 
-# --------------------------------------------------
-# Password Hashing
-# --------------------------------------------------
+# ==================================================
+# KNOWLEDGE BASE CONFIGURATION
+# ==================================================
 
-password_hash = PasswordHash.recommended()
+KNOWLEDGE_BASE_DIR = BASE_DIR / "knowledge_base"
 
 
-# --------------------------------------------------
-# FastAPI Application
-# --------------------------------------------------
+# ==================================================
+# FASTAPI APPLICATION
+# ==================================================
 
 app = FastAPI(
     title="AI IT Operations Platform",
-    description="Backend API for IT incident and operations management",
+    description="IT ticket management and AI-powered incident analysis platform",
     version="1.0.0"
 )
 
 
-# --------------------------------------------------
-# Authentication Configuration
-# --------------------------------------------------
+# ==================================================
+# CORS CONFIGURATION
+# ==================================================
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
-# --------------------------------------------------
-# JWT Token Creation
-# --------------------------------------------------
+# ==================================================
+# PASSWORD + JWT CONFIGURATION
+# ==================================================
+
+password_hash = PasswordHash.recommended()
+
+oauth2_scheme = OAuth2PasswordBearer(
+    tokenUrl="login"
+)
+
+
+# ==================================================
+# DATABASE CONNECTION
+# ==================================================
+
+def get_connection():
+
+    return psycopg.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        dbname=DB_NAME,
+        user=DB_USER,
+        password=DB_PASSWORD
+    )
+
+
+# ==================================================
+# PYDANTIC MODELS
+# ==================================================
+
+class Ticket(BaseModel):
+
+    title: str
+    description: str
+    priority: Literal["low", "medium", "high"]
+
+
+class TicketStatusUpdate(BaseModel):
+
+    status: Literal[
+        "open",
+        "in_progress",
+        "resolved",
+        "closed"
+    ]
+
+
+class UserCreate(BaseModel):
+
+    username: str
+    password: str
+
+
+# ==================================================
+# JWT TOKEN CREATION
+# ==================================================
 
 def create_access_token(data: dict):
+
     to_encode = data.copy()
 
-    expire = datetime.now(timezone.utc) + timedelta(hours=1)
+    expire = (
+        datetime.now(timezone.utc)
+        + timedelta(hours=1)
+    )
 
     to_encode.update({
         "exp": expire
@@ -70,178 +155,9 @@ def create_access_token(data: dict):
     return encoded_jwt
 
 
-# --------------------------------------------------
-# Database Connection
-# --------------------------------------------------
-
-def get_connection():
-    return psycopg.connect(
-        host=os.getenv("DB_HOST"),
-        port=os.getenv("DB_PORT"),
-        dbname=os.getenv("DB_NAME"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD")
-    )
-
-
-# --------------------------------------------------
-# Pydantic Models
-# --------------------------------------------------
-
-class Ticket(BaseModel):
-    title: str
-    description: str
-    priority: Literal["low", "medium", "high"]
-
-
-class TicketStatusUpdate(BaseModel):
-    status: Literal["open", "in_progress", "resolved", "closed"]
-
-
-class UserCreate(BaseModel):
-    username: str
-    password: str
-
-
-# --------------------------------------------------
-# Home Endpoint
-# --------------------------------------------------
-
-@app.get("/")
-def home():
-    return {
-        "message": "AI IT Operations Platform is running"
-    }
-
-
-# --------------------------------------------------
-# User Registration
-# --------------------------------------------------
-
-@app.post("/register")
-def register_user(user: UserCreate):
-
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    try:
-        # Check whether username already exists
-        cursor.execute(
-            """
-            SELECT id
-            FROM users
-            WHERE username = %s;
-            """,
-            (user.username,)
-        )
-
-        existing_user = cursor.fetchone()
-
-        if existing_user:
-            raise HTTPException(
-                status_code=409,
-                detail="Username already exists"
-            )
-
-        # Hash password before storing it
-        hashed_password = password_hash.hash(user.password)
-
-        cursor.execute(
-            """
-            INSERT INTO users
-            (username, hashed_password)
-            VALUES (%s, %s)
-            RETURNING id, username, role, created_at;
-            """,
-            (
-                user.username,
-                hashed_password
-            )
-        )
-
-        new_user = cursor.fetchone()
-
-        conn.commit()
-
-        return {
-            "message": "User registered successfully",
-            "user": {
-                "id": new_user[0],
-                "username": new_user[1],
-                "role": new_user[2],
-                "created_at": new_user[3]
-            }
-        }
-
-    finally:
-        cursor.close()
-        conn.close()
-
-
-# --------------------------------------------------
-# User Login
-# --------------------------------------------------
-
-@app.post("/login")
-def login_user(
-    form_data: OAuth2PasswordRequestForm = Depends()
-):
-
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    try:
-        cursor.execute(
-            """
-            SELECT id, username, hashed_password, role
-            FROM users
-            WHERE username = %s;
-            """,
-            (form_data.username,)
-        )
-
-        user = cursor.fetchone()
-
-    finally:
-        cursor.close()
-        conn.close()
-
-    # Username does not exist
-    if not user:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid username or password",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
-
-    # Verify password
-    if not password_hash.verify(
-        form_data.password,
-        user[2]
-    ):
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid username or password",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
-
-    # Create JWT
-    access_token = create_access_token(
-        data={
-            "sub": user[1],
-            "role": user[3]
-        }
-    )
-
-    return {
-        "access_token": access_token,
-        "token_type": "bearer"
-    }
-
-
-# --------------------------------------------------
-# Get Current User from JWT
-# --------------------------------------------------
+# ==================================================
+# CURRENT USER
+# ==================================================
 
 def get_current_user(
     token: str = Depends(oauth2_scheme)
@@ -250,10 +166,13 @@ def get_current_user(
     credentials_exception = HTTPException(
         status_code=401,
         detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"}
+        headers={
+            "WWW-Authenticate": "Bearer"
+        }
     )
 
     try:
+
         payload = jwt.decode(
             token,
             SECRET_KEY,
@@ -261,277 +180,873 @@ def get_current_user(
         )
 
         username = payload.get("sub")
-        role = payload.get("role")
 
         if username is None:
             raise credentials_exception
 
         return {
             "username": username,
-            "role": role
+            "role": payload.get(
+                "role",
+                "support"
+            )
         }
 
     except jwt.ExpiredSignatureError:
+
         raise HTTPException(
             status_code=401,
             detail="Token has expired",
-            headers={"WWW-Authenticate": "Bearer"}
+            headers={
+                "WWW-Authenticate": "Bearer"
+            }
         )
 
     except jwt.InvalidTokenError:
+
         raise credentials_exception
 
 
-# --------------------------------------------------
-# Create Ticket
-# --------------------------------------------------
+# ==================================================
+# HOME
+# ==================================================
 
-@app.post("/tickets", status_code=201)
-def create_ticket(
-    ticket: Ticket,
-    current_user: dict = Depends(get_current_user)
-):
+@app.get("/")
+def home():
+
+    return {
+        "message": "AI IT Operations Platform API is running"
+    }
+
+
+# ==================================================
+# REGISTER
+# ==================================================
+
+@app.post(
+    "/register",
+    status_code=201
+)
+def register(user: UserCreate):
 
     conn = get_connection()
-    cursor = conn.cursor()
 
     try:
-        cursor.execute(
-            """
-            INSERT INTO tickets
-            (title, description, priority)
-            VALUES (%s, %s, %s)
-            RETURNING id, title, description, priority, status, created_at;
-            """,
-            (
-                ticket.title,
-                ticket.description,
-                ticket.priority
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT id
+                FROM users
+                WHERE username = %s
+                """,
+                (user.username,)
             )
-        )
 
-        new_ticket = cursor.fetchone()
+            existing_user = cur.fetchone()
 
-        conn.commit()
+            if existing_user:
 
-        return {
-            "message": "Ticket created successfully",
-            "ticket": {
-                "id": new_ticket[0],
-                "title": new_ticket[1],
-                "description": new_ticket[2],
-                "priority": new_ticket[3],
-                "status": new_ticket[4],
-                "created_at": new_ticket[5]
+                raise HTTPException(
+                    status_code=409,
+                    detail="Username already exists"
+                )
+
+            hashed_password = password_hash.hash(
+                user.password
+            )
+
+            cur.execute(
+                """
+                INSERT INTO users
+                (
+                    username,
+                    hashed_password
+                )
+                VALUES (%s, %s)
+                RETURNING
+                    id,
+                    username,
+                    role,
+                    created_at
+                """,
+                (
+                    user.username,
+                    hashed_password
+                )
+            )
+
+            new_user = cur.fetchone()
+
+            conn.commit()
+
+            return {
+                "id": new_user[0],
+                "username": new_user[1],
+                "role": new_user[2],
+                "created_at": new_user[3]
             }
-        }
 
     finally:
-        cursor.close()
+
         conn.close()
 
 
-# --------------------------------------------------
-# Get All Tickets
-# --------------------------------------------------
+# ==================================================
+# LOGIN
+# ==================================================
 
-@app.get("/tickets")
-def get_tickets(
-    current_user: dict = Depends(get_current_user)
+@app.post("/login")
+def login(
+    form_data: OAuth2PasswordRequestForm = Depends()
 ):
 
     conn = get_connection()
-    cursor = conn.cursor()
 
     try:
-        cursor.execute(
-            """
-            SELECT
-                id,
-                title,
-                description,
-                priority,
-                status,
-                created_at
-            FROM tickets
-            ORDER BY id;
-            """
-        )
 
-        rows = cursor.fetchall()
+        with conn.cursor() as cur:
 
-        tickets = []
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    username,
+                    hashed_password,
+                    role
+                FROM users
+                WHERE username = %s
+                """,
+                (form_data.username,)
+            )
 
-        for row in rows:
-            tickets.append({
+            user = cur.fetchone()
+
+            if not user:
+
+                raise HTTPException(
+                    status_code=401,
+                    detail="Incorrect username or password",
+                    headers={
+                        "WWW-Authenticate": "Bearer"
+                    }
+                )
+
+            password_valid = password_hash.verify(
+                form_data.password,
+                user[2]
+            )
+
+            if not password_valid:
+
+                raise HTTPException(
+                    status_code=401,
+                    detail="Incorrect username or password",
+                    headers={
+                        "WWW-Authenticate": "Bearer"
+                    }
+                )
+
+            access_token = create_access_token(
+                {
+                    "sub": user[1],
+                    "role": user[3]
+                }
+            )
+
+            return {
+                "access_token": access_token,
+                "token_type": "bearer"
+            }
+
+    finally:
+
+        conn.close()
+
+
+# ==================================================
+# GET ALL TICKETS
+# ==================================================
+
+@app.get("/tickets")
+def get_tickets(
+    current_user: dict = Depends(
+        get_current_user
+    )
+):
+
+    conn = get_connection()
+
+    try:
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    title,
+                    description,
+                    priority,
+                    status,
+                    created_at
+                FROM tickets
+                ORDER BY id
+                """
+            )
+
+            rows = cur.fetchall()
+
+            tickets = []
+
+            for row in rows:
+
+                tickets.append({
+                    "id": row[0],
+                    "title": row[1],
+                    "description": row[2],
+                    "priority": row[3],
+                    "status": row[4],
+                    "created_at": row[5]
+                })
+
+            return tickets
+
+    finally:
+
+        conn.close()
+
+
+# ==================================================
+# GET SINGLE TICKET
+# ==================================================
+
+@app.get("/tickets/{ticket_id}")
+def get_ticket(
+    ticket_id: int,
+    current_user: dict = Depends(
+        get_current_user
+    )
+):
+
+    conn = get_connection()
+
+    try:
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    title,
+                    description,
+                    priority,
+                    status,
+                    created_at
+                FROM tickets
+                WHERE id = %s
+                """,
+                (ticket_id,)
+            )
+
+            row = cur.fetchone()
+
+            if not row:
+
+                raise HTTPException(
+                    status_code=404,
+                    detail="Ticket not found"
+                )
+
+            return {
                 "id": row[0],
                 "title": row[1],
                 "description": row[2],
                 "priority": row[3],
                 "status": row[4],
                 "created_at": row[5]
-            })
-
-        return {
-            "tickets": tickets
-        }
+            }
 
     finally:
-        cursor.close()
+
         conn.close()
 
 
-# --------------------------------------------------
-# Get Single Ticket
-# --------------------------------------------------
+# ==================================================
+# CREATE TICKET
+# ==================================================
 
-@app.get("/tickets/{ticket_id}")
-def get_ticket(
-    ticket_id: int,
-    current_user: dict = Depends(get_current_user)
+@app.post(
+    "/tickets",
+    status_code=201
+)
+def create_ticket(
+    ticket: Ticket,
+    current_user: dict = Depends(
+        get_current_user
+    )
 ):
 
     conn = get_connection()
-    cursor = conn.cursor()
 
     try:
-        cursor.execute(
-            """
-            SELECT
-                id,
-                title,
-                description,
-                priority,
-                status,
-                created_at
-            FROM tickets
-            WHERE id = %s;
-            """,
-            (ticket_id,)
-        )
 
-        ticket = cursor.fetchone()
+        with conn.cursor() as cur:
 
-        if not ticket:
-            raise HTTPException(
-                status_code=404,
-                detail="Ticket not found"
+            cur.execute(
+                """
+                INSERT INTO tickets
+                (
+                    title,
+                    description,
+                    priority
+                )
+                VALUES (%s, %s, %s)
+                RETURNING
+                    id,
+                    title,
+                    description,
+                    priority,
+                    status,
+                    created_at
+                """,
+                (
+                    ticket.title,
+                    ticket.description,
+                    ticket.priority
+                )
             )
 
-        return {
-            "ticket": {
-                "id": ticket[0],
-                "title": ticket[1],
-                "description": ticket[2],
-                "priority": ticket[3],
-                "status": ticket[4],
-                "created_at": ticket[5]
+            row = cur.fetchone()
+
+            conn.commit()
+
+            return {
+                "id": row[0],
+                "title": row[1],
+                "description": row[2],
+                "priority": row[3],
+                "status": row[4],
+                "created_at": row[5]
             }
-        }
 
     finally:
-        cursor.close()
+
         conn.close()
 
 
-# --------------------------------------------------
-# Update Ticket Status
-# --------------------------------------------------
+# ==================================================
+# UPDATE TICKET STATUS
+# ==================================================
 
-@app.put("/tickets/{ticket_id}/status")
+@app.put(
+    "/tickets/{ticket_id}/status"
+)
 def update_ticket_status(
     ticket_id: int,
     status_update: TicketStatusUpdate,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(
+        get_current_user
+    )
 ):
 
     conn = get_connection()
-    cursor = conn.cursor()
 
     try:
-        cursor.execute(
-            """
-            UPDATE tickets
-            SET status = %s
-            WHERE id = %s
-            RETURNING
-                id,
-                title,
-                description,
-                priority,
-                status,
-                created_at;
-            """,
-            (
-                status_update.status,
-                ticket_id
-            )
-        )
 
-        updated_ticket = cursor.fetchone()
+        with conn.cursor() as cur:
 
-        if not updated_ticket:
-            raise HTTPException(
-                status_code=404,
-                detail="Ticket not found"
+            cur.execute(
+                """
+                UPDATE tickets
+                SET status = %s
+                WHERE id = %s
+                RETURNING
+                    id,
+                    title,
+                    description,
+                    priority,
+                    status,
+                    created_at
+                """,
+                (
+                    status_update.status,
+                    ticket_id
+                )
             )
 
-        conn.commit()
+            row = cur.fetchone()
 
-        return {
-            "message": "Ticket status updated successfully",
-            "ticket": {
-                "id": updated_ticket[0],
-                "title": updated_ticket[1],
-                "description": updated_ticket[2],
-                "priority": updated_ticket[3],
-                "status": updated_ticket[4],
-                "created_at": updated_ticket[5]
+            if not row:
+
+                raise HTTPException(
+                    status_code=404,
+                    detail="Ticket not found"
+                )
+
+            conn.commit()
+
+            return {
+                "id": row[0],
+                "title": row[1],
+                "description": row[2],
+                "priority": row[3],
+                "status": row[4],
+                "created_at": row[5]
             }
-        }
 
     finally:
-        cursor.close()
+
         conn.close()
 
 
-# --------------------------------------------------
-# Delete Ticket
-# --------------------------------------------------
+# ==================================================
+# DELETE TICKET
+# ==================================================
 
-@app.delete("/tickets/{ticket_id}")
+@app.delete(
+    "/tickets/{ticket_id}"
+)
 def delete_ticket(
     ticket_id: int,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(
+        get_current_user
+    )
 ):
 
     conn = get_connection()
-    cursor = conn.cursor()
 
     try:
-        cursor.execute(
-            """
-            DELETE FROM tickets
-            WHERE id = %s
-            RETURNING id;
-            """,
-            (ticket_id,)
-        )
 
-        deleted_ticket = cursor.fetchone()
+        with conn.cursor() as cur:
 
-        if not deleted_ticket:
-            raise HTTPException(
-                status_code=404,
-                detail="Ticket not found"
+            cur.execute(
+                """
+                DELETE FROM tickets
+                WHERE id = %s
+                RETURNING id
+                """,
+                (ticket_id,)
             )
 
-        conn.commit()
+            row = cur.fetchone()
 
-        return {
-            "message": "Ticket deleted successfully"
-        }
+            if not row:
+
+                raise HTTPException(
+                    status_code=404,
+                    detail="Ticket not found"
+                )
+
+            conn.commit()
+
+            return {
+                "message": "Ticket deleted successfully",
+                "ticket_id": row[0]
+            }
 
     finally:
-        cursor.close()
+
         conn.close()
+
+
+# ==================================================
+# RAG - TEXT NORMALIZATION
+# ==================================================
+
+def normalize_text(text: str):
+
+    text = text.lower()
+
+    text = re.sub(
+        r"[^a-z0-9\s]",
+        " ",
+        text
+    )
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text
+    )
+
+    return text.strip()
+
+
+# ==================================================
+# RAG - KNOWLEDGE RETRIEVAL
+# ==================================================
+
+def retrieve_knowledge(
+    ticket_title: str,
+    ticket_description: str
+):
+
+    query = normalize_text(
+        f"{ticket_title} {ticket_description}"
+    )
+
+    query_words = set(
+        query.split()
+    )
+
+    # ----------------------------------------------
+    # Domain-specific keywords
+    # ----------------------------------------------
+
+    vpn_keywords = {
+        "vpn",
+        "connecting",
+        "connection",
+        "connect",
+        "gateway",
+        "authentication",
+        "credentials",
+        "dns",
+        "firewall",
+        "antivirus",
+        "remote"
+    }
+
+    cpu_keywords = {
+        "cpu",
+        "server",
+        "usage",
+        "high",
+        "process",
+        "memory",
+        "load",
+        "performance"
+    }
+
+    server_keywords = {
+        "server",
+        "service",
+        "disk",
+        "memory",
+        "process",
+        "performance",
+        "restart"
+    }
+
+    documents = []
+
+    if not KNOWLEDGE_BASE_DIR.exists():
+
+        return []
+
+    for file_path in KNOWLEDGE_BASE_DIR.glob(
+        "*.txt"
+    ):
+
+        content = file_path.read_text(
+            encoding="utf-8"
+        )
+
+        content_normalized = normalize_text(
+            content
+        )
+
+        content_words = set(
+            content_normalized.split()
+        )
+
+        score = len(
+            query_words.intersection(
+                content_words
+            )
+        )
+
+        filename = file_path.name.lower()
+
+        # ------------------------------------------
+        # VPN relevance boost
+        # ------------------------------------------
+
+        if (
+            query_words.intersection(
+                vpn_keywords
+            )
+            and "vpn" in filename
+        ):
+
+            score += 20
+
+        # ------------------------------------------
+        # CPU relevance boost
+        # ------------------------------------------
+
+        if (
+            query_words.intersection(
+                cpu_keywords
+            )
+            and "cpu" in filename
+        ):
+
+            score += 20
+
+        # ------------------------------------------
+        # Server relevance boost
+        # Only use when genuinely server-related
+        # ------------------------------------------
+
+        if (
+            query_words.intersection(
+                server_keywords
+            )
+            and "server" in filename
+            and not query_words.intersection(
+                vpn_keywords
+            )
+        ):
+
+            score += 10
+
+        documents.append({
+            "file": file_path.name,
+            "content": content,
+            "score": score
+        })
+
+    documents.sort(
+        key=lambda item: item["score"],
+        reverse=True
+    )
+
+    relevant_documents = [
+        document
+        for document in documents
+        if document["score"] > 0
+    ]
+
+    # ----------------------------------------------
+    # Keep only the most relevant document
+    # ----------------------------------------------
+
+    if relevant_documents:
+
+        highest_score = (
+            relevant_documents[0]["score"]
+        )
+
+        relevant_documents = [
+            document
+            for document in relevant_documents
+            if document["score"]
+            >= highest_score * 0.60
+        ][:2]
+
+    return relevant_documents
+
+
+# ==================================================
+# AI INCIDENT ANALYZER + RAG
+# ==================================================
+
+@app.post(
+    "/tickets/{ticket_id}/analyze"
+)
+def analyze_ticket(
+    ticket_id: int,
+    current_user: dict = Depends(
+        get_current_user
+    )
+):
+
+    # ------------------------------------------------
+    # GET TICKET
+    # ------------------------------------------------
+
+    conn = get_connection()
+
+    try:
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    title,
+                    description,
+                    priority,
+                    status
+                FROM tickets
+                WHERE id = %s
+                """,
+                (ticket_id,)
+            )
+
+            ticket = cur.fetchone()
+
+    finally:
+
+        conn.close()
+
+    if not ticket:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Ticket not found"
+        )
+
+
+    # ------------------------------------------------
+    # RETRIEVE KNOWLEDGE
+    # ------------------------------------------------
+
+    relevant_documents = retrieve_knowledge(
+        ticket[1],
+        ticket[2]
+    )
+
+    knowledge_context = ""
+
+    for document in relevant_documents:
+
+        knowledge_context += (
+            f"\n\n--- KNOWLEDGE SOURCE: "
+            f"{document['file']} ---\n"
+            f"{document['content']}"
+        )
+
+
+    # ------------------------------------------------
+    # AI PROMPT
+    # ------------------------------------------------
+
+    prompt = f"""
+You are an IT Operations Support Engineer.
+
+Your job is to analyze the incident using ONLY
+the supplied internal knowledge base and ticket
+information.
+
+STRICT GROUNDING RULES:
+
+1. Do not invent facts.
+2. Do not invent KB article numbers.
+3. Do not invent incident IDs.
+4. Do not invent commands, policies, configurations,
+   metrics, or system details.
+5. Do not mention "KB Article 1234", "KB Article 5678",
+   or any other article number unless that exact
+   number exists in the supplied knowledge base.
+6. If the knowledge base does not provide enough
+   information, say:
+   "Additional investigation is required."
+7. Clearly distinguish between a probable cause and
+   a possible contributing factor.
+8. Use practical IT support language.
+9. Keep the response concise.
+10. Do not repeat the entire knowledge base.
+
+INTERNAL KNOWLEDGE BASE:
+{knowledge_context}
+
+TICKET:
+
+Ticket ID: {ticket[0]}
+Title: {ticket[1]}
+Description: {ticket[2]}
+Priority: {ticket[3]}
+Status: {ticket[4]}
+
+Return the analysis using exactly these sections:
+
+Incident Analysis
+
+Probable Root Cause
+
+Possible Contributing Factors
+
+Recommended Troubleshooting Steps
+
+Recommended Resolution
+
+Escalation Criteria
+
+Next Steps
+
+For troubleshooting steps, use only steps supported
+by the internal knowledge base.
+
+For escalation criteria, use only escalation conditions
+supported by the internal knowledge base.
+
+Do not create fake references or article numbers.
+"""
+
+
+    # ------------------------------------------------
+    # CALL OLLAMA
+    # ------------------------------------------------
+
+    try:
+
+        response = requests.post(
+            OLLAMA_URL,
+            json={
+                "model": OLLAMA_MODEL,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": 0.1
+                }
+            },
+            timeout=120
+        )
+
+        response.raise_for_status()
+
+        ai_result = response.json()
+
+        analysis = ai_result.get(
+            "response",
+            ""
+        ).strip()
+
+        if not analysis:
+
+            raise HTTPException(
+                status_code=500,
+                detail="AI model returned an empty response"
+            )
+
+        return {
+            "ticket_id": ticket[0],
+            "title": ticket[1],
+            "priority": ticket[3],
+            "analysis": analysis,
+            "knowledge_sources": [
+                document["file"]
+                for document
+                in relevant_documents
+            ]
+        }
+
+    except requests.exceptions.ConnectionError:
+
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Ollama is not running. "
+                "Start Ollama and try again."
+            )
+        )
+
+    except requests.exceptions.Timeout:
+
+        raise HTTPException(
+            status_code=504,
+            detail="AI analysis request timed out."
+        )
+
+    except requests.exceptions.RequestException as e:
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"AI service error: {str(e)}"
+        )
