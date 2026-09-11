@@ -21,15 +21,10 @@ def use_test_database(monkeypatch):
 
 @pytest.fixture
 def auth_headers():
-    """
-    Creates a test user if it does not already exist,
-    logs in, and returns the JWT Authorization header.
-    """
 
     username = "testuser"
     password = "Test@12345"
 
-    # Try to register the test user
     register_response = client.post(
         "/register",
         json={
@@ -38,11 +33,8 @@ def auth_headers():
         }
     )
 
-    # 200 = newly created
-    # 409 = user already exists from previous test run
-    assert register_response.status_code in [200, 409]
+    assert register_response.status_code in [201, 409]
 
-    # Login
     login_response = client.post(
         "/login",
         data={
@@ -71,7 +63,7 @@ def test_home():
     assert response.status_code == 200
 
     assert response.json() == {
-        "message": "AI IT Operations Platform is running"
+        "message": "AI IT Operations Platform API is running"
     }
 
 
@@ -91,9 +83,7 @@ def test_register():
         }
     )
 
-    # 200 = first run
-    # 409 = user already exists
-    assert response.status_code in [200, 409]
+    assert response.status_code in [201, 409]
 
 
 # --------------------------------------------------
@@ -131,7 +121,7 @@ def test_unauthorized_ticket_access():
 def test_get_missing_ticket(auth_headers):
 
     response = client.get(
-        "/tickets/999",
+        "/tickets/999999",
         headers=auth_headers
     )
 
@@ -162,11 +152,15 @@ def test_create_ticket(auth_headers):
 
     data = response.json()
 
-    assert data["message"] == "Ticket created successfully"
+    assert data["title"] == "Test Ticket"
 
-    assert data["ticket"]["title"] == "Test Ticket"
+    assert data["description"] == "Automated test ticket"
 
-    assert data["ticket"]["priority"] == "low"
+    assert data["priority"] == "low"
+
+    assert data["status"] == "open"
+
+    assert "id" in data
 
 
 # --------------------------------------------------
@@ -184,12 +178,7 @@ def test_get_tickets(auth_headers):
 
     data = response.json()
 
-    assert "tickets" in data
-
-    assert isinstance(
-        data["tickets"],
-        list
-    )
+    assert isinstance(data, list)
 
 
 # --------------------------------------------------
@@ -210,7 +199,7 @@ def test_update_ticket_status(auth_headers):
 
     assert create_response.status_code == 201
 
-    ticket_id = create_response.json()["ticket"]["id"]
+    ticket_id = create_response.json()["id"]
 
     response = client.put(
         f"/tickets/{ticket_id}/status",
@@ -222,7 +211,11 @@ def test_update_ticket_status(auth_headers):
 
     assert response.status_code == 200
 
-    assert response.json()["ticket"]["status"] == "resolved"
+    data = response.json()
+
+    assert data["id"] == ticket_id
+
+    assert data["status"] == "resolved"
 
 
 # --------------------------------------------------
@@ -243,7 +236,7 @@ def test_delete_ticket(auth_headers):
 
     assert create_response.status_code == 201
 
-    ticket_id = create_response.json()["ticket"]["id"]
+    ticket_id = create_response.json()["id"]
 
     response = client.delete(
         f"/tickets/{ticket_id}",
@@ -253,10 +246,10 @@ def test_delete_ticket(auth_headers):
     assert response.status_code == 200
 
     assert response.json() == {
-        "message": "Ticket deleted successfully"
+        "message": "Ticket deleted successfully",
+        "ticket_id": ticket_id
     }
 
-    # Verify ticket is actually deleted
     get_response = client.get(
         f"/tickets/{ticket_id}",
         headers=auth_headers
