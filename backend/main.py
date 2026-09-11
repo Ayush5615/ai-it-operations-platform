@@ -6,6 +6,7 @@ from typing import Literal
 
 import jwt
 import requests
+import boto3
 import psycopg
 
 from dotenv import load_dotenv
@@ -47,6 +48,18 @@ OLLAMA_MODEL = "llama3.2:3b"
 # ==================================================
 
 KNOWLEDGE_BASE_DIR = BASE_DIR / "knowledge_base"
+
+AWS_REGION = os.getenv("AWS_REGION")
+S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
+S3_KNOWLEDGE_BASE_PREFIX = os.getenv(
+    "S3_KNOWLEDGE_BASE_PREFIX",
+    "knowledge_base/"
+)
+
+s3_client = boto3.client(
+    "s3",
+    region_name=AWS_REGION
+)
 
 
 # ==================================================
@@ -677,6 +690,20 @@ def normalize_text(text: str):
 
 
 # ==================================================
+# S3 KNOWLEDGE FILE READER
+# ==================================================
+
+def get_knowledge_file_from_s3(filename: str):
+
+    response = s3_client.get_object(
+        Bucket=S3_BUCKET_NAME,
+        Key=f"{S3_KNOWLEDGE_BASE_PREFIX}{filename}"
+    )
+
+    return response["Body"].read().decode("utf-8")
+
+
+# ==================================================
 # RAG - KNOWLEDGE RETRIEVAL
 # ==================================================
 
@@ -794,19 +821,31 @@ def retrieve_knowledge(
 
         return []
 
-    file_path = KNOWLEDGE_BASE_DIR / selected_file
-
-    if not file_path.exists():
-
-        return []
-
     # ----------------------------------------------
-    # READ ONLY SELECTED DOCUMENT
+    # READ KNOWLEDGE FROM S3
     # ----------------------------------------------
 
-    content = file_path.read_text(
-        encoding="utf-8"
-    )
+    try:
+
+        content = get_knowledge_file_from_s3(
+            selected_file
+        )
+
+    except Exception:
+
+        # ------------------------------------------
+        # LOCAL FALLBACK
+        # ------------------------------------------
+
+        file_path = KNOWLEDGE_BASE_DIR / selected_file
+
+        if not file_path.exists():
+
+            return []
+
+        content = file_path.read_text(
+            encoding="utf-8"
+        )
 
     # ----------------------------------------------
     # RETURN ONE BEST DOCUMENT ONLY
@@ -814,7 +853,7 @@ def retrieve_knowledge(
 
     return [
         {
-            "file": file_path.name,
+            "file": selected_file,
             "content": content,
             "score": 100
         }
@@ -941,9 +980,15 @@ STRICT GROUNDING RULES:
 12. Never invent incident IDs.
 13. Never create fake references.
 14. Never mention "KB Article" anywhere in the response.
-15. Never use general IT knowledge to fill missing information.
-16. If the knowledge base does not support a statement,
+15. Never mention "Knowledge Base" as a citation or reference.
+16. Never mention source filenames inside the analysis.
+17. Never use general IT knowledge to fill missing information.
+18. If the knowledge base does not support a statement,
     do not include that statement.
+
+Do NOT add citations, references, article numbers,
+source filenames, or parenthetical source explanations
+to the answer.
 
 ROOT CAUSE RULE:
 
@@ -959,12 +1004,16 @@ CONTRIBUTING FACTOR RULE:
 Only include contributing factors explicitly supported
 by the supplied knowledge base.
 
+Do not explain where the contributing factors came from.
+
 TROUBLESHOOTING RULE:
 
 Every troubleshooting step must be directly supported
 by the supplied knowledge base.
 
 Do not create additional steps.
+
+Do not add source references to the steps.
 
 RESOLUTION RULE:
 
@@ -1000,6 +1049,11 @@ In that case, clearly state that no relevant internal
 knowledge base source was found.
 
 Keep the response concise and practical.
+IMPORTANT:
+Do not repeat all possible causes or all troubleshooting steps from the knowledge base.
+Select only the most relevant items for the specific ticket.
+Return a maximum of 5 contributing factors, 5 troubleshooting steps, and 5 escalation criteria.
+Do not add any step that is not explicitly present in the supplied knowledge base.
 
 {knowledge_instruction}
 
@@ -1032,12 +1086,15 @@ FINAL CHECK:
 Before returning the response, verify that:
 
 - No KB Article references are present.
+- No Knowledge Base citations are present.
+- No source filenames are present inside the analysis.
 - No invented article numbers are present.
 - No invented incident IDs are present.
 - Every troubleshooting step comes from the supplied knowledge base.
 - Every resolution statement comes from the supplied knowledge base.
 - Every escalation condition comes from the supplied knowledge base.
 - No outside IT knowledge has been added.
+- No citations or parenthetical source references have been added.
 """
 
 
@@ -1070,7 +1127,25 @@ Before returning the response, verify that:
         ).strip()
 
         # ------------------------------------------------
-        # REMOVE UNSUPPORTED KB REFERENCES
+        # REMOVE KNOWLEDGE BASE REFERENCES
+        # ------------------------------------------------
+
+        analysis = re.sub(
+            r"\s*\(Knowledge Base:\s*[^)]*\)",
+            "",
+            analysis,
+            flags=re.IGNORECASE
+        )
+
+        analysis = re.sub(
+            r"\s*\[Knowledge Base:\s*[^\]]*\]",
+            "",
+            analysis,
+            flags=re.IGNORECASE
+        )
+
+        # ------------------------------------------------
+        # REMOVE KB ARTICLE REFERENCES
         # ------------------------------------------------
 
         analysis = re.sub(
@@ -1095,7 +1170,7 @@ Before returning the response, verify that:
         )
 
         # ------------------------------------------------
-        # REMOVE COMMON FAKE ARTICLE REFERENCES
+        # REMOVE ARTICLE REFERENCES
         # ------------------------------------------------
 
         analysis = re.sub(
@@ -1107,6 +1182,61 @@ Before returning the response, verify that:
 
         analysis = re.sub(
             r"\s*\[Article\s*#?\s*\d+\]",
+            "",
+            analysis,
+            flags=re.IGNORECASE
+        )
+
+        # ------------------------------------------------
+        # REMOVE SOURCE FILENAMES
+        # ------------------------------------------------
+
+        analysis = re.sub(
+            r"\s*\(?(?:Knowledge Base|Source|File)\s*:\s*[\w.-]+\.txt[^)]*\)?",
+            "",
+            analysis,
+            flags=re.IGNORECASE
+        )
+
+        # ------------------------------------------------
+        # REMOVE ISSUE REFERENCES
+        # ------------------------------------------------
+
+        analysis = re.sub(
+            r"\s*\(Issue:\s*[^)]*\)",
+            "",
+            analysis,
+            flags=re.IGNORECASE
+        )
+
+        # ------------------------------------------------
+        # REMOVE POSSIBLE CAUSE REFERENCES
+        # ------------------------------------------------
+
+        analysis = re.sub(
+            r"\s*\(Possible Cause:\s*[^)]*\)",
+            "",
+            analysis,
+            flags=re.IGNORECASE
+        )
+
+        # ------------------------------------------------
+        # REMOVE TROUBLESHOOTING STEP REFERENCES
+        # ------------------------------------------------
+
+        analysis = re.sub(
+            r"\s*\(Troubleshooting Step:\s*[^)]*\)",
+            "",
+            analysis,
+            flags=re.IGNORECASE
+        )
+
+        # ------------------------------------------------
+        # REMOVE PARENTHETICAL TXT REFERENCES
+        # ------------------------------------------------
+
+        analysis = re.sub(
+            r"\s*\([^)]*\.txt[^)]*\)",
             "",
             analysis,
             flags=re.IGNORECASE
