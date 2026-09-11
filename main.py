@@ -72,7 +72,7 @@ app.add_middleware(
     ],
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*"]
 )
 
 
@@ -182,6 +182,7 @@ def get_current_user(
         username = payload.get("sub")
 
         if username is None:
+
             raise credentials_exception
 
         return {
@@ -693,165 +694,131 @@ def retrieve_knowledge(
     )
 
     # ----------------------------------------------
-    # Strong domain keywords
+    # DOMAIN KEYWORDS
     # ----------------------------------------------
 
     vpn_keywords = {
         "vpn",
-        "authentication",
-        "credentials",
+        "vpnconnection",
         "gateway",
+        "remoteaccess",
         "remote",
+        "credentials",
+        "authentication",
         "dns",
-        "firewall"
+        "firewall",
+        "antivirus"
     }
 
     cpu_keywords = {
         "cpu",
+        "utilization",
         "processor",
-        "usage",
         "load",
-        "performance"
+        "highcpu",
+        "cpuusage"
     }
 
     server_keywords = {
         "server",
+        "application",
         "service",
+        "slow",
+        "latency",
+        "response",
+        "timeout",
         "disk",
         "memory",
-        "restart"
+        "restart",
+        "unavailable",
+        "performance"
     }
 
     # ----------------------------------------------
-    # Detect ticket domain
+    # DOMAIN DETECTION
     # ----------------------------------------------
 
-    vpn_match = any(
-        keyword in query_words
-        for keyword in vpn_keywords
-    )
+    selected_domain = None
 
-    cpu_match = any(
-        keyword in query_words
-        for keyword in cpu_keywords
-    )
-
-    server_match = any(
-        keyword in query_words
-        for keyword in server_keywords
-    )
-
-    # ----------------------------------------------
-    # CPU gets priority over generic server terms
-    # ----------------------------------------------
-
-    if cpu_match:
-
-        selected_domain = "cpu"
-
-    elif vpn_match:
+    # VPN gets highest priority
+    if (
+        "vpn" in query_words
+        or query_words.intersection(vpn_keywords)
+    ):
 
         selected_domain = "vpn"
 
-    elif server_match:
+    # Explicit CPU issue
+    elif (
+        query_words.intersection(cpu_keywords)
+        or "high cpu" in query
+        or "cpu usage" in query
+        or "cpu utilization" in query
+    ):
+
+        selected_domain = "cpu"
+
+    # Application/server performance issue
+    elif (
+        query_words.intersection(server_keywords)
+    ):
 
         selected_domain = "server"
 
+    # No supported domain
     else:
 
-        # No clear supported domain
         return []
 
-    documents = []
+    # ----------------------------------------------
+    # DOMAIN → EXACT KNOWLEDGE FILE
+    # ----------------------------------------------
 
-    if not KNOWLEDGE_BASE_DIR.exists():
+    domain_to_file = {
+
+        "vpn":
+            "vpn_troubleshooting.txt",
+
+        "cpu":
+            "cpu_incident_runbook.txt",
+
+        "server":
+            "server_troubleshooting.txt"
+    }
+
+    selected_file = domain_to_file.get(
+        selected_domain
+    )
+
+    if not selected_file:
 
         return []
 
-    for file_path in KNOWLEDGE_BASE_DIR.glob(
-        "*.txt"
-    ):
+    file_path = KNOWLEDGE_BASE_DIR / selected_file
 
-        filename = file_path.name.lower()
+    if not file_path.exists():
 
-        content = file_path.read_text(
-            encoding="utf-8"
-        )
-
-        content_normalized = normalize_text(
-            content
-        )
-
-        content_words = set(
-            content_normalized.split()
-        )
-
-        score = len(
-            query_words.intersection(
-                content_words
-            )
-        )
-
-        # ------------------------------------------
-        # Strict domain matching
-        # ------------------------------------------
-
-        if selected_domain == "vpn":
-
-            if "vpn" in filename:
-
-                score += 100
-
-            else:
-
-                continue
-
-        elif selected_domain == "cpu":
-
-            if "cpu" in filename:
-
-                score += 100
-
-            else:
-
-                continue
-
-        elif selected_domain == "server":
-
-            if (
-                "server" in filename
-                and "cpu" not in filename
-                and "vpn" not in filename
-            ):
-
-                score += 100
-
-            else:
-
-                continue
-
-        if score > 0:
-
-            documents.append({
-                "file": file_path.name,
-                "content": content,
-                "score": score
-            })
+        return []
 
     # ----------------------------------------------
-    # Sort by relevance
+    # READ ONLY SELECTED DOCUMENT
     # ----------------------------------------------
 
-    documents.sort(
-        key=lambda item: item["score"],
-        reverse=True
+    content = file_path.read_text(
+        encoding="utf-8"
     )
 
     # ----------------------------------------------
-    # Return strongest matching document only
+    # RETURN ONE BEST DOCUMENT ONLY
     # ----------------------------------------------
 
-    return documents[:1]
+    return [
+        {
+            "file": file_path.name,
+            "content": content,
+            "score": 100
+        }
+    ]
 
 
 # ==================================================
@@ -925,14 +892,13 @@ def analyze_ticket(
         )
 
     # ------------------------------------------------
-    # AI PROMPT
+    # KNOWLEDGE INSTRUCTION
     # ------------------------------------------------
 
-    if relevant_documents:
+    if knowledge_context:
 
         knowledge_instruction = f"""
 INTERNAL KNOWLEDGE BASE:
-
 {knowledge_context}
 """
 
@@ -941,44 +907,99 @@ INTERNAL KNOWLEDGE BASE:
         knowledge_instruction = """
 INTERNAL KNOWLEDGE BASE:
 
-No relevant internal knowledge-base document
+No relevant internal knowledge base document
 was found for this ticket.
 """
+
+    # ------------------------------------------------
+    # AI PROMPT
+    # ------------------------------------------------
 
     prompt = f"""
 You are an IT Operations Support Engineer.
 
-Your job is to analyze the incident using ONLY
-the supplied internal knowledge base and ticket
-information.
+Analyze the incident using ONLY:
+
+1. The ticket information.
+2. The supplied internal knowledge base.
+
+Do NOT use outside knowledge.
 
 STRICT GROUNDING RULES:
 
-1. Do not invent facts.
-2. Do not invent KB article numbers.
-3. Do not invent incident IDs.
-4. Do not invent commands, policies, configurations,
-   metrics, or system details.
-5. Do not mention "KB Article 1234", "KB Article 5678",
-   or any other article number unless that exact
-   number exists in the supplied knowledge base.
-6. If no relevant knowledge-base document is supplied,
-   or if the knowledge base does not provide enough
-   information, say:
-   "Additional investigation is required."
-7. Clearly distinguish between a probable cause and
-   a possible contributing factor.
-8. Use practical IT support language.
-9. Keep the response concise.
-10. Do not repeat the entire knowledge base.
-11. Do not assume that a generic ticket belongs to
-    a specific technical domain.
-12. Do not use troubleshooting steps from an unrelated
-    knowledge-base document.
-13. If the ticket is unrelated to the supplied
-    knowledge base, state that the available internal
-    knowledge base does not contain a relevant
-    troubleshooting procedure.
+1. Never invent facts.
+2. Never invent root causes.
+3. Never invent troubleshooting steps.
+4. Never invent resolutions.
+5. Never invent escalation criteria.
+6. Never invent commands.
+7. Never invent policies.
+8. Never invent configurations.
+9. Never invent metrics.
+10. Never invent system details.
+11. Never invent KB article numbers.
+12. Never invent incident IDs.
+13. Never create fake references.
+14. Never mention "KB Article" anywhere in the response.
+15. Never use general IT knowledge to fill missing information.
+16. If the knowledge base does not support a statement,
+    do not include that statement.
+
+ROOT CAUSE RULE:
+
+Only provide a probable root cause if the supplied
+knowledge base explicitly supports it for the reported issue.
+
+Otherwise write exactly:
+
+Additional investigation is required to determine the root cause.
+
+CONTRIBUTING FACTOR RULE:
+
+Only include contributing factors explicitly supported
+by the supplied knowledge base.
+
+TROUBLESHOOTING RULE:
+
+Every troubleshooting step must be directly supported
+by the supplied knowledge base.
+
+Do not create additional steps.
+
+RESOLUTION RULE:
+
+Only provide a recommended resolution if it is explicitly
+supported by the supplied knowledge base.
+
+If the knowledge base does not explicitly support a resolution,
+write exactly:
+
+Additional investigation is required.
+
+Do NOT add a "however" section or alternative suggestions.
+
+ESCALATION RULE:
+
+Only include escalation criteria explicitly stated
+in the supplied knowledge base.
+
+If escalation criteria are not supported, write:
+
+Additional investigation is required.
+
+KNOWLEDGE SOURCE RULE:
+
+Use only the supplied knowledge source.
+
+Do not combine information from documents that were not supplied.
+
+If no relevant knowledge base document is supplied,
+do not invent troubleshooting information.
+
+In that case, clearly state that no relevant internal
+knowledge base source was found.
+
+Keep the response concise and practical.
 
 {knowledge_instruction}
 
@@ -1006,16 +1027,17 @@ Escalation Criteria
 
 Next Steps
 
-For troubleshooting steps, use only steps supported
-by the relevant internal knowledge base.
+FINAL CHECK:
 
-For escalation criteria, use only escalation conditions
-supported by the relevant internal knowledge base.
+Before returning the response, verify that:
 
-If no relevant knowledge base exists, do not invent
-troubleshooting steps or escalation criteria.
-
-Do not create fake references or article numbers.
+- No KB Article references are present.
+- No invented article numbers are present.
+- No invented incident IDs are present.
+- Every troubleshooting step comes from the supplied knowledge base.
+- Every resolution statement comes from the supplied knowledge base.
+- Every escalation condition comes from the supplied knowledge base.
+- No outside IT knowledge has been added.
 """
 
 
@@ -1032,7 +1054,7 @@ Do not create fake references or article numbers.
                 "prompt": prompt,
                 "stream": False,
                 "options": {
-                    "temperature": 0.1
+                    "temperature": 0.0
                 }
             },
             timeout=120
@@ -1046,6 +1068,67 @@ Do not create fake references or article numbers.
             "response",
             ""
         ).strip()
+
+        # ------------------------------------------------
+        # REMOVE UNSUPPORTED KB REFERENCES
+        # ------------------------------------------------
+
+        analysis = re.sub(
+            r"\s*\(KB Article:\s*\d+\)",
+            "",
+            analysis,
+            flags=re.IGNORECASE
+        )
+
+        analysis = re.sub(
+            r"\s*\[KB Article:\s*\d+\]",
+            "",
+            analysis,
+            flags=re.IGNORECASE
+        )
+
+        analysis = re.sub(
+            r"\s*KB Article:\s*\d+",
+            "",
+            analysis,
+            flags=re.IGNORECASE
+        )
+
+        # ------------------------------------------------
+        # REMOVE COMMON FAKE ARTICLE REFERENCES
+        # ------------------------------------------------
+
+        analysis = re.sub(
+            r"\s*\(Article\s*#?\s*\d+\)",
+            "",
+            analysis,
+            flags=re.IGNORECASE
+        )
+
+        analysis = re.sub(
+            r"\s*\[Article\s*#?\s*\d+\]",
+            "",
+            analysis,
+            flags=re.IGNORECASE
+        )
+
+        # ------------------------------------------------
+        # CLEAN EXTRA SPACES
+        # ------------------------------------------------
+
+        analysis = re.sub(
+            r"[ \t]{2,}",
+            " ",
+            analysis
+        )
+
+        analysis = re.sub(
+            r"\n{3,}",
+            "\n\n",
+            analysis
+        )
+
+        analysis = analysis.strip()
 
         if not analysis:
 
@@ -1061,8 +1144,7 @@ Do not create fake references or article numbers.
             "analysis": analysis,
             "knowledge_sources": [
                 document["file"]
-                for document
-                in relevant_documents
+                for document in relevant_documents
             ]
         }
 
