@@ -693,30 +693,23 @@ def retrieve_knowledge(
     )
 
     # ----------------------------------------------
-    # Domain-specific keywords
+    # Strong domain keywords
     # ----------------------------------------------
 
     vpn_keywords = {
         "vpn",
-        "connecting",
-        "connection",
-        "connect",
-        "gateway",
         "authentication",
         "credentials",
+        "gateway",
+        "remote",
         "dns",
-        "firewall",
-        "antivirus",
-        "remote"
+        "firewall"
     }
 
     cpu_keywords = {
         "cpu",
-        "server",
+        "processor",
         "usage",
-        "high",
-        "process",
-        "memory",
         "load",
         "performance"
     }
@@ -726,10 +719,48 @@ def retrieve_knowledge(
         "service",
         "disk",
         "memory",
-        "process",
-        "performance",
         "restart"
     }
+
+    # ----------------------------------------------
+    # Detect ticket domain
+    # ----------------------------------------------
+
+    vpn_match = any(
+        keyword in query_words
+        for keyword in vpn_keywords
+    )
+
+    cpu_match = any(
+        keyword in query_words
+        for keyword in cpu_keywords
+    )
+
+    server_match = any(
+        keyword in query_words
+        for keyword in server_keywords
+    )
+
+    # ----------------------------------------------
+    # CPU gets priority over generic server terms
+    # ----------------------------------------------
+
+    if cpu_match:
+
+        selected_domain = "cpu"
+
+    elif vpn_match:
+
+        selected_domain = "vpn"
+
+    elif server_match:
+
+        selected_domain = "server"
+
+    else:
+
+        # No clear supported domain
+        return []
 
     documents = []
 
@@ -740,6 +771,8 @@ def retrieve_knowledge(
     for file_path in KNOWLEDGE_BASE_DIR.glob(
         "*.txt"
     ):
+
+        filename = file_path.name.lower()
 
         content = file_path.read_text(
             encoding="utf-8"
@@ -759,86 +792,66 @@ def retrieve_knowledge(
             )
         )
 
-        filename = file_path.name.lower()
-
         # ------------------------------------------
-        # VPN relevance boost
+        # Strict domain matching
         # ------------------------------------------
 
-        if (
-            query_words.intersection(
-                vpn_keywords
-            )
-            and "vpn" in filename
-        ):
+        if selected_domain == "vpn":
 
-            score += 20
+            if "vpn" in filename:
 
-        # ------------------------------------------
-        # CPU relevance boost
-        # ------------------------------------------
+                score += 100
 
-        if (
-            query_words.intersection(
-                cpu_keywords
-            )
-            and "cpu" in filename
-        ):
+            else:
 
-            score += 20
+                continue
 
-        # ------------------------------------------
-        # Server relevance boost
-        # Only use when genuinely server-related
-        # ------------------------------------------
+        elif selected_domain == "cpu":
 
-        if (
-            query_words.intersection(
-                server_keywords
-            )
-            and "server" in filename
-            and not query_words.intersection(
-                vpn_keywords
-            )
-        ):
+            if "cpu" in filename:
 
-            score += 10
+                score += 100
 
-        documents.append({
-            "file": file_path.name,
-            "content": content,
-            "score": score
-        })
+            else:
+
+                continue
+
+        elif selected_domain == "server":
+
+            if (
+                "server" in filename
+                and "cpu" not in filename
+                and "vpn" not in filename
+            ):
+
+                score += 100
+
+            else:
+
+                continue
+
+        if score > 0:
+
+            documents.append({
+                "file": file_path.name,
+                "content": content,
+                "score": score
+            })
+
+    # ----------------------------------------------
+    # Sort by relevance
+    # ----------------------------------------------
 
     documents.sort(
         key=lambda item: item["score"],
         reverse=True
     )
 
-    relevant_documents = [
-        document
-        for document in documents
-        if document["score"] > 0
-    ]
-
     # ----------------------------------------------
-    # Keep only the most relevant document
+    # Return strongest matching document only
     # ----------------------------------------------
 
-    if relevant_documents:
-
-        highest_score = (
-            relevant_documents[0]["score"]
-        )
-
-        relevant_documents = [
-            document
-            for document in relevant_documents
-            if document["score"]
-            >= highest_score * 0.60
-        ][:2]
-
-    return relevant_documents
+    return documents[:1]
 
 
 # ==================================================
@@ -892,7 +905,6 @@ def analyze_ticket(
             detail="Ticket not found"
         )
 
-
     # ------------------------------------------------
     # RETRIEVE KNOWLEDGE
     # ------------------------------------------------
@@ -912,10 +924,26 @@ def analyze_ticket(
             f"{document['content']}"
         )
 
-
     # ------------------------------------------------
     # AI PROMPT
     # ------------------------------------------------
+
+    if relevant_documents:
+
+        knowledge_instruction = f"""
+INTERNAL KNOWLEDGE BASE:
+
+{knowledge_context}
+"""
+
+    else:
+
+        knowledge_instruction = """
+INTERNAL KNOWLEDGE BASE:
+
+No relevant internal knowledge-base document
+was found for this ticket.
+"""
 
     prompt = f"""
 You are an IT Operations Support Engineer.
@@ -934,7 +962,8 @@ STRICT GROUNDING RULES:
 5. Do not mention "KB Article 1234", "KB Article 5678",
    or any other article number unless that exact
    number exists in the supplied knowledge base.
-6. If the knowledge base does not provide enough
+6. If no relevant knowledge-base document is supplied,
+   or if the knowledge base does not provide enough
    information, say:
    "Additional investigation is required."
 7. Clearly distinguish between a probable cause and
@@ -942,9 +971,16 @@ STRICT GROUNDING RULES:
 8. Use practical IT support language.
 9. Keep the response concise.
 10. Do not repeat the entire knowledge base.
+11. Do not assume that a generic ticket belongs to
+    a specific technical domain.
+12. Do not use troubleshooting steps from an unrelated
+    knowledge-base document.
+13. If the ticket is unrelated to the supplied
+    knowledge base, state that the available internal
+    knowledge base does not contain a relevant
+    troubleshooting procedure.
 
-INTERNAL KNOWLEDGE BASE:
-{knowledge_context}
+{knowledge_instruction}
 
 TICKET:
 
@@ -971,10 +1007,13 @@ Escalation Criteria
 Next Steps
 
 For troubleshooting steps, use only steps supported
-by the internal knowledge base.
+by the relevant internal knowledge base.
 
 For escalation criteria, use only escalation conditions
-supported by the internal knowledge base.
+supported by the relevant internal knowledge base.
+
+If no relevant knowledge base exists, do not invent
+troubleshooting steps or escalation criteria.
 
 Do not create fake references or article numbers.
 """
