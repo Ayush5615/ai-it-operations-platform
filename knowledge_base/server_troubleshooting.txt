@@ -1,0 +1,50 @@
+Server Troubleshooting Runbook
+
+Issue: General Server Performance or Availability Problem
+
+Common Symptoms:
+- Server is slow or unresponsive.
+- Applications hosted on the server are unavailable.
+- Users experience high response times or timeouts.
+- CPU, memory, disk, or network utilization is abnormal.
+- Services may stop unexpectedly.
+
+Possible Causes:
+1. High CPU utilization.
+2. Insufficient available memory.
+3. Disk space exhaustion.
+4. Disk or filesystem problems.
+5. Network connectivity problems.
+6. Application or system service failure.
+7. Recent configuration or software changes.
+8. Excessive background processes.
+9. Hardware or infrastructure failure.
+
+Troubleshooting Steps:
+
+1. Check whether the server is reachable.
+2. Check CPU utilization.
+3. Check available memory.
+4. Check disk space and filesystem utilization.
+5. Identify abnormal processes or services.
+6. Review system and application logs.
+7. Check network connectivity and DNS resolution.
+8. Verify that required application services are running.
+9. Check for recent deployments, configuration changes, or patches.
+10. Compare current resource utilization with the normal baseline.
+11. Monitor the server after corrective action.
+
+Recommended Resolution:
+- Restart or recover failed services when appropriate.
+- Terminate or optimize abnormal resource-consuming processes.
+- Free disk space when storage is exhausted.
+- Correct network or DNS configuration problems.
+- Roll back problematic configuration or software changes when approved.
+- Escalate infrastructure or hardware problems to the appropriate team.
+
+Escalation Criteria:
+- Server remains unavailable after standard troubleshooting.
+- Critical production services are affected.
+- Hardware or infrastructure failure is suspected.
+- Multiple servers are affected.
+- Network, storage, or security team intervention is required.

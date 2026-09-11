@@ -1,0 +1,47 @@
+CPU Incident Troubleshooting Runbook
+
+Issue: High Server CPU Usage
+
+Common Symptoms:
+- CPU utilization remains above 80-90%.
+- Applications become slow or unresponsive.
+- Server response time increases.
+- Users may experience timeouts.
+- System processes may consume excessive CPU resources.
+
+Possible Causes:
+1. Application process consuming excessive CPU.
+2. Sudden increase in user traffic.
+3. Background or scheduled jobs.
+4. Infinite loop or inefficient application process.
+5. Malware or unauthorized process.
+6. Recent software deployment or configuration change.
+7. Insufficient server resources.
+8. Monitoring or logging process consuming excessive CPU.
+
+Troubleshooting Steps:
+
+1. Check current CPU utilization and identify whether the issue is persistent.
+2. Identify the process consuming the highest CPU resources.
+3. Check application and system logs for errors.
+4. Check whether a recent deployment or configuration change occurred.
+5. Review scheduled jobs and background processes.
+6. Check server memory and disk usage to identify related resource issues.
+7. Restart the affected application only if appropriate and approved.
+8. Compare current CPU usage with normal baseline usage.
+9. Check for unusual or unauthorized processes.
+10. Monitor CPU utilization after corrective action.
+
+Recommended Resolution:
+- Stop or restart the problematic process when appropriate.
+- Fix application or configuration issues causing excessive CPU usage.
+- Roll back a recent problematic deployment if required and approved.
+- Reschedule or optimize resource-intensive background jobs.
+- Increase server resources only when workload requirements justify it.
+
+Escalation Criteria:
+- CPU remains above critical levels after standard troubleshooting.
+- Multiple production services are affected.
+- A recent deployment appears to have caused the incident.
+- An unauthorized or suspicious process is detected.
+- Infrastructure-level changes are required.

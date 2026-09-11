@@ -1,0 +1,45 @@
+VPN Troubleshooting Runbook
+
+Issue: VPN Not Connecting
+
+Common Symptoms:
+- VPN client fails to establish a connection.
+- User cannot access internal company resources.
+- VPN connection repeatedly disconnects.
+- Authentication or connection timeout errors may appear.
+
+Possible Causes:
+1. Incorrect VPN username or password.
+2. Incorrect VPN server or gateway configuration.
+3. Outdated or corrupted VPN client.
+4. Network connectivity problems.
+5. Firewall or antivirus blocking VPN traffic.
+6. DNS configuration problems.
+7. VPN server may be unavailable.
+8. User account may be locked or VPN access may be disabled.
+
+Troubleshooting Steps:
+
+1. Verify that the user's internet connection is working.
+2. Confirm the VPN username and password.
+3. Verify the configured VPN server or gateway address.
+4. Restart the VPN client and try connecting again.
+5. Check whether the VPN client has pending updates.
+6. Restart the computer if the VPN client continues to fail.
+7. Temporarily check firewall or antivirus rules for VPN-related blocking.
+8. Test the VPN connection using another network if possible.
+9. Check DNS and network configuration if the VPN connects but internal resources cannot be reached.
+10. Check VPN server availability if multiple users are experiencing the same issue.
+
+Recommended Resolution:
+- Correct invalid VPN credentials or server configuration.
+- Update or reinstall the VPN client if required.
+- Resolve local network, firewall, or DNS issues.
+- If the VPN server is unavailable or multiple users are affected, escalate the incident to the network or infrastructure team.
+
+Escalation Criteria:
+- VPN remains unavailable after standard troubleshooting.
+- Multiple users cannot connect to the VPN.
+- VPN server or gateway appears unavailable.
+- Authentication failures continue despite verified credentials.
+- The issue requires changes to network infrastructure or firewall policies.
