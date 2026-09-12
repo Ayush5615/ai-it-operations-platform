@@ -25,6 +25,7 @@ function App() {
 
   const [loading, setLoading] = useState(false);
   const [analyzing, setAnalyzing] = useState(null);
+  const [updatingStatus, setUpdatingStatus] = useState(null);
   const [error, setError] = useState("");
 
   // ==================================================
@@ -141,12 +142,10 @@ function App() {
         throw new Error(data.detail || "Failed to create ticket");
       }
 
-      // Clear form
       setTicketTitle("");
       setTicketDescription("");
       setTicketPriority("medium");
 
-      // Refresh ticket list
       await loadTickets();
     } catch (err) {
       setError(err.message);
@@ -192,6 +191,45 @@ function App() {
   }
 
   // ==================================================
+  // UPDATE TICKET STATUS
+  // ==================================================
+
+  async function updateTicketStatus(ticketId, status) {
+    setError("");
+    setUpdatingStatus(ticketId);
+
+    try {
+      const response = await fetch(
+        `${API_URL}/tickets/${ticketId}/status`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            status: status,
+          }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.detail || "Failed to update ticket status"
+        );
+      }
+
+      await loadTickets();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setUpdatingStatus(null);
+    }
+  }
+
+  // ==================================================
   // LOGOUT
   // ==================================================
 
@@ -216,7 +254,7 @@ function App() {
     const lines = text.split("\n");
 
     return lines.map((line, index) => {
-      let content = line.trim();
+      const content = line.trim();
 
       if (!content) {
         return (
@@ -695,14 +733,36 @@ function App() {
                   {ticket.priority.toUpperCase()}
                 </span>
 
-                <span
+                {/* STATUS CONTROL */}
+                <select
                   className={`status ${ticket.status}`}
+                  value={ticket.status}
+                  onChange={(e) =>
+                    updateTicketStatus(
+                      ticket.id,
+                      e.target.value
+                    )
+                  }
+                  disabled={
+                    updatingStatus === ticket.id
+                  }
                 >
-                  {ticket.status.replace(
-                    "_",
-                    " "
-                  )}
-                </span>
+                  <option value="open">
+                    Open
+                  </option>
+
+                  <option value="in_progress">
+                    In Progress
+                  </option>
+
+                  <option value="resolved">
+                    Resolved
+                  </option>
+
+                  <option value="closed">
+                    Closed
+                  </option>
+                </select>
 
                 <button
                   className="analyze-button"
@@ -753,9 +813,11 @@ function App() {
             <div className="empty-analysis">
 
               Select an incident and click{" "}
+
               <strong>
                 Analyze with AI
               </strong>{" "}
+
               to generate troubleshooting
               recommendations.
 
