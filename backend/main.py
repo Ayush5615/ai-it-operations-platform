@@ -39,8 +39,15 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 # OLLAMA CONFIGURATION
 # ==================================================
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "llama3.2:3b"
+OLLAMA_URL = os.getenv(
+    "OLLAMA_URL",
+    "http://localhost:11434/api/generate"
+)
+
+OLLAMA_MODEL = os.getenv(
+    "OLLAMA_MODEL",
+    "llama3.2:3b"
+)
 
 
 # ==================================================
