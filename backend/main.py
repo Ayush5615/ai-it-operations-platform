@@ -5,8 +5,8 @@ from datetime import datetime, timezone, timedelta
 from typing import Literal
 
 import jwt
-import requests
 import boto3
+from google import genai
 import psycopg
 
 from dotenv import load_dotenv
@@ -34,19 +34,14 @@ DB_PASSWORD = os.getenv("DB_PASSWORD")
 
 SECRET_KEY = os.getenv("SECRET_KEY")
 
-
-# ==================================================
-# OLLAMA CONFIGURATION
-# ==================================================
-
-OLLAMA_URL = os.getenv(
-    "OLLAMA_URL",
-    "http://localhost:11434/api/generate"
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv(
+    "GEMINI_MODEL",
+    "gemini-3.6-flash"
 )
 
-OLLAMA_MODEL = os.getenv(
-    "OLLAMA_MODEL",
-    "llama3.2:3b"
+gemini_client = genai.Client(
+    api_key=GEMINI_API_KEY
 )
 
 
@@ -1056,11 +1051,19 @@ In that case, clearly state that no relevant internal
 knowledge base source was found.
 
 Keep the response concise and practical.
+
 IMPORTANT:
-Do not repeat all possible causes or all troubleshooting steps from the knowledge base.
+
+Do not repeat all possible causes or all troubleshooting steps
+from the knowledge base.
+
 Select only the most relevant items for the specific ticket.
-Return a maximum of 5 contributing factors, 5 troubleshooting steps, and 5 escalation criteria.
-Do not add any step that is not explicitly present in the supplied knowledge base.
+
+Return a maximum of 5 contributing factors,
+5 troubleshooting steps, and 5 escalation criteria.
+
+Do not add any step that is not explicitly present
+in the supplied knowledge base.
 
 {knowledge_instruction}
 
@@ -1106,32 +1109,23 @@ Before returning the response, verify that:
 
 
     # ------------------------------------------------
-    # CALL OLLAMA
+    # CALL GEMINI
     # ------------------------------------------------
 
     try:
 
-        response = requests.post(
-            OLLAMA_URL,
-            json={
-                "model": OLLAMA_MODEL,
-                "prompt": prompt,
-                "stream": False,
-                "options": {
-                    "temperature": 0.0
-                }
-            },
-            timeout=120
+        response = gemini_client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config={
+                "temperature": 0.0
+            }
         )
 
-        response.raise_for_status()
-
-        ai_result = response.json()
-
-        analysis = ai_result.get(
-            "response",
-            ""
+        analysis = (
+            response.text or ""
         ).strip()
+
 
         # ------------------------------------------------
         # REMOVE KNOWLEDGE BASE REFERENCES
@@ -1150,6 +1144,7 @@ Before returning the response, verify that:
             analysis,
             flags=re.IGNORECASE
         )
+
 
         # ------------------------------------------------
         # REMOVE KB ARTICLE REFERENCES
@@ -1176,6 +1171,7 @@ Before returning the response, verify that:
             flags=re.IGNORECASE
         )
 
+
         # ------------------------------------------------
         # REMOVE ARTICLE REFERENCES
         # ------------------------------------------------
@@ -1194,6 +1190,7 @@ Before returning the response, verify that:
             flags=re.IGNORECASE
         )
 
+
         # ------------------------------------------------
         # REMOVE SOURCE FILENAMES
         # ------------------------------------------------
@@ -1204,6 +1201,7 @@ Before returning the response, verify that:
             analysis,
             flags=re.IGNORECASE
         )
+
 
         # ------------------------------------------------
         # REMOVE ISSUE REFERENCES
@@ -1216,6 +1214,7 @@ Before returning the response, verify that:
             flags=re.IGNORECASE
         )
 
+
         # ------------------------------------------------
         # REMOVE POSSIBLE CAUSE REFERENCES
         # ------------------------------------------------
@@ -1226,6 +1225,7 @@ Before returning the response, verify that:
             analysis,
             flags=re.IGNORECASE
         )
+
 
         # ------------------------------------------------
         # REMOVE TROUBLESHOOTING STEP REFERENCES
@@ -1238,6 +1238,7 @@ Before returning the response, verify that:
             flags=re.IGNORECASE
         )
 
+
         # ------------------------------------------------
         # REMOVE PARENTHETICAL TXT REFERENCES
         # ------------------------------------------------
@@ -1248,6 +1249,7 @@ Before returning the response, verify that:
             analysis,
             flags=re.IGNORECASE
         )
+
 
         # ------------------------------------------------
         # CLEAN EXTRA SPACES
@@ -1267,12 +1269,14 @@ Before returning the response, verify that:
 
         analysis = analysis.strip()
 
+
         if not analysis:
 
             raise HTTPException(
                 status_code=500,
                 detail="AI model returned an empty response"
             )
+
 
         return {
             "ticket_id": ticket[0],
@@ -1285,24 +1289,13 @@ Before returning the response, verify that:
             ]
         }
 
-    except requests.exceptions.ConnectionError:
 
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Ollama is not running. "
-                "Start Ollama and try again."
-            )
-        )
+    except HTTPException:
 
-    except requests.exceptions.Timeout:
+        raise
 
-        raise HTTPException(
-            status_code=504,
-            detail="AI analysis request timed out."
-        )
 
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
 
         raise HTTPException(
             status_code=500,
